@@ -31,6 +31,39 @@ class KeyPointClassifier(object):
 
         result = self.interpreter.get_tensor(output_details_tensor_index)
 
-        result_index = np.argmax(np.squeeze(result))
+        converted_value = np.squeeze(result)
 
+        result_index = np.argmax(converted_value)
+        # print()
+        # print(result_index)
+        # for value in np.squeeze(result):
+        #     print(f'{value:.20f}')
+
+        if result_index == 1:
+            if converted_value[result_index] < 0.95:
+                result_index = 8
+
+        if result_index == 2:
+            if converted_value[result_index] < 0.95:
+                result_index = 8
+
+        if result_index == 3:
+            if converted_value[result_index] < 0.9:
+                result_index = 8
+
+        if result_index == 4:
+            if converted_value[result_index] < 0.8:
+                result_index = 8
+
+        if result_index == 5:
+            if converted_value[result_index] < 0.8:
+                result_index = 8
+
+        if result_index == 6:
+            if converted_value[result_index] < 0.8:
+                result_index = 8
+
+        if result_index == 7:
+            if converted_value[result_index] < 0.8:
+                result_index = 8
         return result_index

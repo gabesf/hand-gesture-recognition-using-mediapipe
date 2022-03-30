@@ -6,10 +6,11 @@ import argparse
 import itertools
 from collections import Counter
 from collections import deque
-
+import json
 import cv2 as cv
 import numpy as np
 import mediapipe as mp
+import UdpComms as U
 
 from utils import CvFpsCalc
 from model import KeyPointClassifier
@@ -56,12 +57,13 @@ def main():
     cap = cv.VideoCapture(cap_device)
     cap.set(cv.CAP_PROP_FRAME_WIDTH, cap_width)
     cap.set(cv.CAP_PROP_FRAME_HEIGHT, cap_height)
+    sock = U.UdpComms(udpIP="127.0.0.1", portTX=8000, portRX=8001, enableRX=True, suppressWarnings=True)
 
     # モデルロード #############################################################
     mp_hands = mp.solutions.hands
     hands = mp_hands.Hands(
         static_image_mode=use_static_image_mode,
-        max_num_hands=1,
+        max_num_hands=2,
         min_detection_confidence=min_detection_confidence,
         min_tracking_confidence=min_tracking_confidence,
     )
@@ -121,6 +123,8 @@ def main():
         results = hands.process(image)
         image.flags.writeable = True
 
+        hand_sign_id = -1
+        pre_processed_landmark_list = []
         #  ####################################################################
         if results.multi_hand_landmarks is not None:
             for hand_landmarks, handedness in zip(results.multi_hand_landmarks,
@@ -140,8 +144,12 @@ def main():
                             pre_processed_point_history_list)
 
                 # ハンドサイン分類
-                hand_sign_id = keypoint_classifier(pre_processed_landmark_list)
-                if hand_sign_id == 2:  # 指差しサイン
+
+                if handedness.classification[0].label[0:] == "Right":
+                    hand_sign_id = keypoint_classifier(pre_processed_landmark_list)
+
+
+                if hand_sign_id == "N/A":  # 指差しサイン
                     point_history.append(landmark_list[8])  # 人差指座標
                 else:
                     point_history.append([0, 0])
@@ -171,6 +179,23 @@ def main():
         else:
             point_history.append([0, 0])
 
+
+        hand_sign_id = myconverter(hand_sign_id)
+        print(hand_sign_id)
+
+        if(pre_processed_landmark_list):
+            hand_position = pre_processed_landmark_list[0]
+        print(pre_processed_landmark_list[0])
+
+        dataPacket = {
+            "hand_sign_id": hand_sign_id,
+            "hand_position": (10,50),
+            "player_position": (100,50)
+        }
+
+        dataJson = json.dumps(dataPacket)
+        sock.SendData(str(dataJson))  # Send this string to other application
+
         debug_image = draw_point_history(debug_image, point_history)
         debug_image = draw_info(debug_image, fps, mode, number)
 
@@ -180,6 +205,13 @@ def main():
     cap.release()
     cv.destroyAllWindows()
 
+def myconverter(obj):
+    if isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
 
 def select_mode(key, mode):
     number = -1
