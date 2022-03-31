@@ -15,7 +15,7 @@ import UdpComms as U
 from utils import CvFpsCalc
 from model import KeyPointClassifier
 from model import PointHistoryClassifier
-
+from cvzone.PoseModule import PoseDetector
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -59,6 +59,7 @@ def main():
     cap.set(cv.CAP_PROP_FRAME_HEIGHT, cap_height)
     sock = U.UdpComms(udpIP="127.0.0.1", portTX=8000, portRX=8001, enableRX=True, suppressWarnings=True)
 
+    body_detector = PoseDetector()
     # モデルロード #############################################################
     mp_hands = mp.solutions.hands
     hands = mp_hands.Hands(
@@ -185,8 +186,10 @@ def main():
 
         if(pre_processed_landmark_list):
             hand_position = pre_processed_landmark_list[0]
-        print(pre_processed_landmark_list[0])
+            print(pre_processed_landmark_list[0])
 
+        if hand_sign_id == None:
+            hand_sign_id = 8
         dataPacket = {
             "hand_sign_id": hand_sign_id,
             "hand_position": (10,50),
