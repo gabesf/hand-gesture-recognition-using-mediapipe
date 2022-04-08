@@ -74,8 +74,8 @@ def main():
 
     mp_holistic = mp.solutions.holistic
     with mp_holistic.Holistic(
-        min_detection_confidence=0.5,
-        min_tracking_confidence=0.5
+        min_detection_confidence=0.8,
+        min_tracking_confidence=0.8
     ) as holistic:
         keypoint_classifier = KeyPointClassifier()
 
@@ -205,17 +205,18 @@ def main():
                 point_history.append([0, 0])
 
 
+            #print(finger_gesture_id)
             hand_sign_id = myconverter(hand_sign_id)
-            print(hand_sign_id)
+            #print(hand_sign_id)
 
             if(pre_processed_landmark_list):
                 hand_position = pre_processed_landmark_list[0]
-                print(landmark_list[0])
+                #print(landmark_list[0])
 
             if hand_sign_id == None:
                 hand_sign_id = 8
 
-            print("Nose " + str(nose_landmark))
+            #print("Nose " + str(nose_landmark))
 
             if hand_landmarks_list3D[0] == None:
                 hand_landmarks_list3D[0] = [0]
