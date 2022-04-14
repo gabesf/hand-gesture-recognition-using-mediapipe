@@ -151,9 +151,32 @@ def main():
             hand_landmarks_list3D = []
             landmark_list.append(None)
             hand_landmarks_list3D.append(None)
-            #  ####################################################################
+            hands_detected = 0
+
+            combined_results = []
+            multi_handedness = []
             if results.left_hand_landmarks is not None:
-                    hand_landmarks = results.left_hand_landmarks
+                print("Found Left Hand")
+                combined_results.append(results.left_hand_landmarks)
+                multi_handedness.append("Right")
+
+            if results.right_hand_landmarks is not None:
+                print("Found Right Hand")
+                combined_results.append(results.right_hand_landmarks)
+                multi_handedness.append("Left")
+
+            if len(combined_results) > 0:
+                print("Found hands")
+                print("Combined results length " + str(len(combined_results)))
+                print("Multi handedness " + str(len(multi_handedness)))
+                #for hand_landmarks, handedness in combined_results, multi_handedness:
+                #    print(handedness)
+
+            #  ####################################################################
+            if len(combined_results) > 0:
+                for hand_landmarks, handedness in zip(combined_results, multi_handedness):
+                    print(handedness + " being analyzed")
+
                     # Bounding box calculation
                     brect = calc_bounding_rect(debug_image, hand_landmarks)
                     # Landmark calculation
@@ -170,10 +193,13 @@ def main():
 
                     # Hand sign classification
 
+                    if handedness == "Right":
+                        right_hand_sign_id = keypoint_classifier(pre_processed_landmark_list)
+
+                    if handedness == "Left":
+                        left_hand_sign_id = keypoint_classifier(pre_processed_landmark_list)
 
                     hand_sign_id = keypoint_classifier(pre_processed_landmark_list)
-
-
                     if hand_sign_id == "N/A":  # 指差しサイン
                         point_history.append(landmark_list[8])  # 人差指座標
                     else:
@@ -197,7 +223,7 @@ def main():
                     debug_image = draw_info_text(
                         debug_image,
                         brect,
-                        "right",
+                        handedness,
                         keypoint_classifier_labels[hand_sign_id],
                         point_history_classifier_labels[most_common_fg_id[0][0]],
                     )
