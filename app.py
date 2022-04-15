@@ -139,6 +139,8 @@ def main():
             image.flags.writeable = True
 
             hand_sign_id = -1
+            left_hand_sign_id = -1
+            right_hand_sign_id = -1
             pre_processed_landmark_list = []
 
             mp_drawing.draw_landmarks(
@@ -156,27 +158,17 @@ def main():
             combined_results = []
             multi_handedness = []
             if results.left_hand_landmarks is not None:
-                print("Found Left Hand")
                 combined_results.append(results.left_hand_landmarks)
                 multi_handedness.append("Right")
 
             if results.right_hand_landmarks is not None:
-                print("Found Right Hand")
                 combined_results.append(results.right_hand_landmarks)
                 multi_handedness.append("Left")
 
-            if len(combined_results) > 0:
-                print("Found hands")
-                print("Combined results length " + str(len(combined_results)))
-                print("Multi handedness " + str(len(multi_handedness)))
-                #for hand_landmarks, handedness in combined_results, multi_handedness:
-                #    print(handedness)
 
             #  ####################################################################
             if len(combined_results) > 0:
                 for hand_landmarks, handedness in zip(combined_results, multi_handedness):
-                    print(handedness + " being analyzed")
-
                     # Bounding box calculation
                     brect = calc_bounding_rect(debug_image, hand_landmarks)
                     # Landmark calculation
@@ -232,13 +224,18 @@ def main():
 
 
             #print(finger_gesture_id)
-            hand_sign_id = myconverter(hand_sign_id)
+            right_hand_sign_id = myconverter(hand_sign_id)
+            left_hand_sign_id = myconverter((left_hand_sign_id))
             #print(hand_sign_id)
 
             if(pre_processed_landmark_list):
                 hand_position = pre_processed_landmark_list[0]
                 #print(landmark_list[0])
 
+            if right_hand_sign_id == None:
+                right_hand_sign_id = 8
+            if left_hand_sign_id == None:
+                left_hand_sign_id = 8
             if hand_sign_id == None:
                 hand_sign_id = 8
 
@@ -247,7 +244,8 @@ def main():
             if hand_landmarks_list3D[0] == None:
                 hand_landmarks_list3D[0] = [0]
             dataPacket = {
-                "hand_sign_id": hand_sign_id,
+                "right_hand_sign_id": right_hand_sign_id,
+                "left_hand_sign_id": left_hand_sign_id,
                 "hand_position": hand_landmarks_list3D[0],
                 "player_position": nose_landmark
             }
