@@ -224,7 +224,7 @@ def main():
 
 
             #print(finger_gesture_id)
-            right_hand_sign_id = myconverter(hand_sign_id)
+            right_hand_sign_id = myconverter(right_hand_sign_id)
             left_hand_sign_id = myconverter((left_hand_sign_id))
             #print(hand_sign_id)
 
@@ -249,6 +249,10 @@ def main():
                 "hand_position": hand_landmarks_list3D[0],
                 "player_position": nose_landmark
             }
+
+            print("R: " + str(dataPacket["right_hand_sign_id"]))
+            print("L: " + str(dataPacket["left_hand_sign_id"]))
+
 
             dataJson = json.dumps(dataPacket)
             sock.SendData(str(dataJson))  # Send this string to other application
