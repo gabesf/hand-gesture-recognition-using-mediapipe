@@ -144,7 +144,8 @@ def main():
             # Flip the image horizontally for a selfie-view display.
             fps, image = fpsReader.update(image, pos=(50, 80), color=(0, 255, 0), scale=5, thickness=5)
 
-            
+            if results.right_hand_landmarks is not None:
+                
 
             #segmask = np.zeros(image.shape, dtype=np.uint8)
 
