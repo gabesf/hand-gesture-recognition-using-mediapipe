@@ -7,22 +7,22 @@ import itertools
 from collections import Counter
 from collections import deque
 import json
-import cv2 as cv
+import cv2
 import numpy as np
 import mediapipe as mp
 import UdpComms as U
 import cvzone
 from utils import CvFpsCalc
-from model import KeyPointClassifier
-from model import PointHistoryClassifier
 
 mp_drawing = mp.solutions.drawing_utils
 mp_drawing_styles = mp.solutions.drawing_styles
+mp_selfie_segmentation = mp.solutions.selfie_segmentation
+
 
 def get_args():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--device", type=int, default=0)
+    parser.add_argument("--device", type=int, default=1)
     parser.add_argument("--width", help='cap width', type=int, default=960)
     parser.add_argument("--height", help='cap height', type=int, default=540)
 
@@ -41,7 +41,6 @@ def get_args():
     return args
 
 
-
 def main():
     # Argument parsing #################################################################
     args = get_args()
@@ -49,7 +48,8 @@ def main():
     cap_device = args.device
     cap_width = args.width
     cap_height = args.height
-
+    fpsReader = cvzone.FPS()
+    BG_COLOR = (192, 192, 192)  # gray
     use_static_image_mode = args.use_static_image_mode
     min_detection_confidence = args.min_detection_confidence
     min_tracking_confidence = args.min_tracking_confidence
@@ -57,11 +57,10 @@ def main():
     use_brect = True
 
     # Camera preparation ###############################################################
-    cap = cv.VideoCapture(cap_device)
-    cap.set(cv.CAP_PROP_FRAME_WIDTH, cap_width)
-    cap.set(cv.CAP_PROP_FRAME_HEIGHT, cap_height)
+    cap = cv2.VideoCapture(cap_device)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, cap_width)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cap_height)
     sock = U.UdpComms(udpIP="127.0.0.1", portTX=8002, portRX=8003, enableRX=True, suppressWarnings=True)
-
 
     # Model load #############################################################
     # mp_hands = mp.solutions.hands
@@ -74,199 +73,90 @@ def main():
 
     mp_holistic = mp.solutions.holistic
     with mp_holistic.Holistic(
-        min_detection_confidence=0.8,
-        min_tracking_confidence=0.8
-    ) as holistic:
-        keypoint_classifier = KeyPointClassifier()
+            min_detection_confidence=0.8,
+            min_tracking_confidence=0.8,
 
-        point_history_classifier = PointHistoryClassifier()
+    ) as holistic, mp_selfie_segmentation.SelfieSegmentation(
+        model_selection=1) as selfie_segmentation:
 
-        # Read labels ###########################################################
-        with open('model/keypoint_classifier/keypoint_classifier_label.csv',
-                  encoding='utf-8-sig') as f:
-            keypoint_classifier_labels = csv.reader(f)
-            keypoint_classifier_labels = [
-                row[0] for row in keypoint_classifier_labels
-            ]
-        with open(
-                'model/point_history_classifier/point_history_classifier_label.csv',
-                encoding='utf-8-sig') as f:
-            point_history_classifier_labels = csv.reader(f)
-            point_history_classifier_labels = [
-                row[0] for row in point_history_classifier_labels
-            ]
+        bg_image = None
+        while cap.isOpened():
+            success, image = cap.read()
+            if not success:
+                print("Ignoring empty camera frame.")
+                # If loading a video, use 'break' instead of 'continue'.
+                continue
 
-        # FPS Measurement ########################################################
-        cvFpsCalc = CvFpsCalc(buffer_len=10)
-
-        # Coordinate history #################################################################
-        history_length = 16
-        point_history = deque(maxlen=history_length)
-
-        # Finger gesture history ################################################
-        finger_gesture_history = deque(maxlen=history_length)
-
-        #  ########################################################################
-        mode = 0
-        nose_landmark = 0
-        while True:
-            fps = cvFpsCalc.get()
-
-            # Process Key (ESC: end) #################################################
-            key = cv.waitKey(10)
-            if key == 27:  # ESC
-                break
-            number, mode = select_mode(key, mode)
-
-            # Camera capture #####################################################
-            ret, image = cap.read()
-            if not ret:
-                break
-            image = cv.flip(image, 1)  # ミラー表示
-            debug_image = copy.deepcopy(image)
-
-            # Detection implementation #############################################################
-            image = cv.cvtColor(image, cv.COLOR_BGR2RGB)
-
+            # To improve performance, optionally mark the image as not writeable to
+            # pass by reference.
             image.flags.writeable = False
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             results = holistic.process(image)
-
-            nose_landmark = (0,0,0)
-            if results.pose_landmarks:
-                pose_landmark_list = calc_landmark_list3D(image, results.pose_landmarks)
-                nose_landmark = pose_landmark_list[0]
-
+            selfieResults = selfie_segmentation.process(image)
+            # Draw landmark annotation on the image.
             image.flags.writeable = True
-
-            hand_sign_id = -1
-            left_hand_sign_id = -1
-            right_hand_sign_id = -1
-            pre_processed_landmark_list = []
-
+            image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+            mp_drawing.draw_landmarks(
+                image,
+                results.face_landmarks,
+                mp_holistic.FACEMESH_CONTOURS,
+                landmark_drawing_spec=None,
+                connection_drawing_spec=mp_drawing_styles
+                    .get_default_face_mesh_contours_style())
             mp_drawing.draw_landmarks(
                 image,
                 results.pose_landmarks,
                 mp_holistic.POSE_CONNECTIONS,
                 landmark_drawing_spec=mp_drawing_styles
                     .get_default_pose_landmarks_style())
-            landmark_list = []
-            hand_landmarks_list3D = []
-            landmark_list.append(None)
-            hand_landmarks_list3D.append(None)
-            hands_detected = 0
 
-            combined_results = []
-            multi_handedness = []
-            if results.left_hand_landmarks is not None:
-                combined_results.append(results.left_hand_landmarks)
-                multi_handedness.append("Right")
+            mp_drawing.draw_landmarks(
+                image,
+                results.left_hand_landmarks,
+                mp_holistic.HAND_CONNECTIONS,
+                connection_drawing_spec=mp_drawing_styles
+                    .get_default_hand_connections_style(),
+            )
 
-            if results.right_hand_landmarks is not None:
-                combined_results.append(results.right_hand_landmarks)
-                multi_handedness.append("Left")
-
-
-            #  ####################################################################
-            if len(combined_results) > 0:
-                for hand_landmarks, handedness in zip(combined_results, multi_handedness):
-                    # Bounding box calculation
-                    brect = calc_bounding_rect(debug_image, hand_landmarks)
-                    # Landmark calculation
-                    landmark_list = calc_landmark_list(debug_image, hand_landmarks)
-                    hand_landmarks_list3D = calc_landmark_list3D(debug_image, hand_landmarks)
-                    # Conversion to relative coordinates / normalized coordinates
-                    pre_processed_landmark_list = pre_process_landmark(
-                        landmark_list)
-                    pre_processed_point_history_list = pre_process_point_history(
-                        debug_image, point_history)
-                    # Write to the dataset file
-                    logging_csv(number, mode, pre_processed_landmark_list,
-                                pre_processed_point_history_list)
-
-                    # Hand sign classification
-
-                    if handedness == "Right":
-                        right_hand_sign_id = keypoint_classifier(pre_processed_landmark_list)
-
-                    if handedness == "Left":
-                        left_hand_sign_id = keypoint_classifier(pre_processed_landmark_list)
-
-                    hand_sign_id = keypoint_classifier(pre_processed_landmark_list)
-                    if hand_sign_id == "N/A":  # 指差しサイン
-                        point_history.append(landmark_list[8])  # 人差指座標
-                    else:
-                        point_history.append([0, 0])
-
-                    # Finger gesture classification
-                    finger_gesture_id = 0
-                    point_history_len = len(pre_processed_point_history_list)
-                    if point_history_len == (history_length * 2):
-                        finger_gesture_id = point_history_classifier(
-                            pre_processed_point_history_list)
-
-                    # Calculates the gesture IDs in the latest detection
-                    finger_gesture_history.append(finger_gesture_id)
-                    most_common_fg_id = Counter(
-                        finger_gesture_history).most_common()
-
-                    # Drawing part
-                    debug_image = draw_bounding_rect(use_brect, debug_image, brect)
-                    debug_image = draw_landmarks(debug_image, landmark_list)
-                    debug_image = draw_info_text(
-                        debug_image,
-                        brect,
-                        handedness,
-                        keypoint_classifier_labels[hand_sign_id],
-                        point_history_classifier_labels[most_common_fg_id[0][0]],
-                    )
-            else:
-                point_history.append([0, 0])
+            mp_drawing.draw_landmarks(
+                image,
+                results.right_hand_landmarks,
+                mp_holistic.HAND_CONNECTIONS,
+                connection_drawing_spec=mp_drawing_styles
+                    .get_default_hand_connections_style(),
+            )
 
 
-            #print(finger_gesture_id)
-            right_hand_sign_id = myconverter(right_hand_sign_id)
-            left_hand_sign_id = myconverter((left_hand_sign_id))
-            #print(hand_sign_id)
+            condition = np.stack(
+                (selfieResults.segmentation_mask,) * 3, axis=-1) > 0.6
+            # The background can be customized.
+            #   a) Load an image (with the same width and height of the input image) to
+            #      be the background, e.g., bg_image = cv2.imread('/path/to/image/file')
+            #   b) Blur the input image by applying image filtering, e.g.,
+            #      bg_image = cv2.GaussianBlur(image,(55,55),0)
 
-            if(pre_processed_landmark_list):
-                hand_position = pre_processed_landmark_list[0]
-                #print(landmark_list[0])
+            if bg_image is None:
+                bg_image = np.zeros(image.shape, dtype=np.uint8)
+                bg_image[:] = BG_COLOR
 
-            if right_hand_sign_id == None:
-                right_hand_sign_id = 8
-            if left_hand_sign_id == None:
-                left_hand_sign_id = 8
-            if hand_sign_id == None:
-                hand_sign_id = 8
+            output_image = np.where(condition, np.ones(image.shape, dtype=np.uint8), bg_image)
 
-            #print("Nose " + str(nose_landmark))
+            # Flip the image horizontally for a selfie-view display.
+            fps, image = fpsReader.update(image, pos=(50, 80), color=(0, 255, 0), scale=5, thickness=5)
 
-            if hand_landmarks_list3D[0] == None:
-                hand_landmarks_list3D[0] = [0]
-            dataPacket = {
-                "right_hand_sign_id": right_hand_sign_id,
-                "left_hand_sign_id": left_hand_sign_id,
-                "hand_position": hand_landmarks_list3D[0],
-                "player_position": nose_landmark
-            }
+            #segmask = np.zeros(image.shape, dtype=np.uint8)
 
-            print("R: " + str(dataPacket["right_hand_sign_id"]))
-            print("L: " + str(dataPacket["left_hand_sign_id"]))
+            #imgList = [image, image, selfieResults.segmentation_mask]
+            cv2.imshow("segMask", output_image)
+            #stackedImg = cvzone.stackImages(imgList, 3, 0.4)
+            cv2.imshow("stackedImg", image)
 
 
-            dataJson = json.dumps(dataPacket)
-            sock.SendData(str(dataJson))  # Send this string to other application
 
-            debug_image = draw_point_history(debug_image, point_history)
-            debug_image = draw_info(debug_image, fps, mode, number)
-
-            # Screen reflection #############################################################
-            imgList = [debug_image, image]
-            stackedImg = cvzone.stackImages(imgList, 2, 0.75)
-            cv.imshow('Hand Gesture Recognition', stackedImg)
-
+            if cv2.waitKey(5) & 0xFF == 27:
+                break
         cap.release()
-        cv.destroyAllWindows()
+
 
 def myconverter(obj):
     if isinstance(obj, np.integer):
@@ -275,6 +165,7 @@ def myconverter(obj):
         return float(obj)
     elif isinstance(obj, np.ndarray):
         return obj.tolist()
+
 
 def select_mode(key, mode):
     number = -1
@@ -316,11 +207,12 @@ def calc_landmark_list(image, landmarks):
     for _, landmark in enumerate(landmarks.landmark):
         landmark_x = min(int(landmark.x * image_width), image_width - 1)
         landmark_y = min(int(landmark.y * image_height), image_height - 1)
-        #landmark_z = landmark.z
+        # landmark_z = landmark.z
 
         landmark_point.append([landmark_x, landmark_y])
 
     return landmark_point
+
 
 def calc_landmark_list3D(image, landmarks):
     image_width, image_height = image.shape[1], image.shape[0]
@@ -336,6 +228,7 @@ def calc_landmark_list3D(image, landmarks):
         landmark_point.append([landmark_x, landmark_y, landmark_z])
 
     return landmark_point
+
 
 def pre_process_landmark(landmark_list):
     temp_landmark_list = copy.deepcopy(landmark_list)
@@ -404,7 +297,6 @@ def logging_csv(number, mode, landmark_list, point_history_list):
 
 
 def draw_landmarks(image, landmark_point):
-
     if len(landmark_point) > 0:
         # Thumb
         cv.line(image, tuple(landmark_point[2]), tuple(landmark_point[3]),
