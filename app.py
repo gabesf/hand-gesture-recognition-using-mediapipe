@@ -132,6 +132,11 @@ def main():
             results = holistic.process(image)
 
             nose_landmark = (0,0,0)
+
+            #if results.pose_world_landmarks:
+            #    pose_landmark_list3d = calc_landmark_list3D(image, results.pose_world_landmarks)
+            #    print(pose_landmark_list3d[0])
+
             if results.pose_landmarks:
                 pose_landmark_list = calc_landmark_list3D(image, results.pose_landmarks)
                 nose_landmark = pose_landmark_list[0]
