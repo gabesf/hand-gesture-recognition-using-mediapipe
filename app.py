@@ -6,12 +6,16 @@ import argparse
 import itertools
 from collections import Counter
 from collections import deque
+from sys import getsizeof
+from socket import socket, AF_INET, SOCK_DGRAM
+from collections import namedtuple
 import json
 import cv2
 import numpy as np
 import mediapipe as mp
 import UdpComms as U
 import cvzone
+from typing import NamedTuple
 from utils import CvFpsCalc
 
 mp_drawing = mp.solutions.drawing_utils
@@ -19,12 +23,22 @@ mp_drawing_styles = mp.solutions.drawing_styles
 mp_selfie_segmentation = mp.solutions.selfie_segmentation
 
 
+
+HolisticResults = namedtuple('HolisticResults', 'right_hand_landmarks left_hand_landmarks pose_landmarks')
+SelfieSegmentationResults = namedtuple('SelfieSegmentation', 'segmentation_mask')
+
+modeDictionary = {
+    "hands": True,
+    "holistic": True,
+    "segmask": True
+}
+
 def get_args():
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--device", type=int, default=1)
-    parser.add_argument("--width", help='cap width', type=int, default=960)
-    parser.add_argument("--height", help='cap height', type=int, default=540)
+    parser.add_argument("--width", help='cap width', type=int, default=864)
+    parser.add_argument("--height", help='cap height', type=int, default=480)
 
     parser.add_argument('--use_static_image_mode', action='store_true')
     parser.add_argument("--min_detection_confidence",
@@ -42,6 +56,14 @@ def get_args():
 
 
 def main():
+    #SERVER_IP = '192.168.2.130'
+    # SERVER_IP = '0.0.0.0'
+    #PORT_NUMBER = 5000
+    #SIZE = 1024
+    #print("Test client sending packets to IP {0}, via port {1}\n".format(SERVER_IP, PORT_NUMBER))
+
+    #mySocket = socket(AF_INET, SOCK_DGRAM)
+
     # Argument parsing #################################################################
     args = get_args()
 
@@ -58,12 +80,14 @@ def main():
 
     # Camera preparation ###############################################################
     cap = cv2.VideoCapture(cap_device)
+    #cap = cv2.VideoCapture("sample.mp4")
+
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, cap_width)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cap_height)
     sock = U.UdpComms(udpIP="127.0.0.1", portTX=8002, portRX=8003, enableRX=True, suppressWarnings=True)
 
     # Model load #############################################################
-    # mp_hands = mp.solutions.hands
+    mp_hands = mp.solutions.hands
     # hands = mp_hands.Hands(
     #     static_image_mode=use_static_image_mode,
     #     max_num_hands=2,
@@ -77,7 +101,11 @@ def main():
             min_tracking_confidence=0.8,
 
     ) as holistic, mp_selfie_segmentation.SelfieSegmentation(
-        model_selection=1) as selfie_segmentation:
+        model_selection=1) as selfie_segmentation, mp_hands.Hands(
+        model_complexity=0,
+        min_detection_confidence=0.5,
+        min_tracking_confidence=0.5,
+        max_num_hands = 6) as hands:
 
         bg_image = None
         while cap.isOpened():
@@ -89,76 +117,193 @@ def main():
 
             # To improve performance, optionally mark the image as not writeable to
             # pass by reference.
+            debug_image = copy.deepcopy(image)
+            handsImage = copy.deepcopy(image)
             image.flags.writeable = False
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            results = holistic.process(image)
-            selfieResults = selfie_segmentation.process(image)
-            # Draw landmark annotation on the image.
+
+
+            # Results Variables Initialization
+            holisticResults = HolisticResults(None, None, None)
+            selfieResults = SelfieSegmentationResults(None)
+            segMaskImage = None
+            segmaskList = []
+            combined_results = []
+            multi_handedness = []
+            holisticHandsLandmarkList = []
+            holisticPoseLandmarkList = []
+            handsLandmarkList = []
+
+            if modeDictionary["hands"] is True:
+                handsResults = hands.process(image)
+                if handsResults.multi_hand_landmarks:
+                    for hand_landmarks in handsResults.multi_hand_landmarks:
+                        handsLandmarkList.append(calc_landmark_list3D(debug_image, hand_landmarks))
+                        handsLandmarkList.append(calc_landmark_list3D(debug_image, hand_landmarks))
+                        handsLandmarkList.append(calc_landmark_list3D(debug_image, hand_landmarks))
+                        mp_drawing.draw_landmarks(
+                            handsImage,
+                            hand_landmarks,
+                            mp_hands.HAND_CONNECTIONS,
+                            mp_drawing_styles.get_default_hand_landmarks_style(),
+                            mp_drawing_styles.get_default_hand_connections_style())
+
+
+
+            if(modeDictionary["segmask"] == True):
+                selfieResults = selfie_segmentation.process(image)
+                segmaskList = selfieResults.segmentation_mask.tolist()
+                condition = np.stack(
+                    (selfieResults.segmentation_mask,) * 3, axis=-1) > 0.6
+
+                if bg_image is None:
+                    bg_image = np.zeros(image.shape, dtype=np.uint8)
+                    bg_image[:] = BG_COLOR
+
+                segMaskImage = np.where(condition, np.ones(image.shape, dtype=np.uint8), bg_image)
+
+            if modeDictionary["holistic"] is True:
+                holisticResults = holistic.process(image)
+                mp_drawing.draw_landmarks(
+                    image,
+                    holisticResults.face_landmarks,
+                    mp_holistic.FACEMESH_CONTOURS,
+                    landmark_drawing_spec=None,
+                    connection_drawing_spec=mp_drawing_styles
+                        .get_default_face_mesh_contours_style())
+                mp_drawing.draw_landmarks(
+                    image,
+                    holisticResults.pose_landmarks,
+                    mp_holistic.POSE_CONNECTIONS,
+                    landmark_drawing_spec=mp_drawing_styles
+                        .get_default_pose_landmarks_style())
+
+                mp_drawing.draw_landmarks(
+                    image,
+                    holisticResults.left_hand_landmarks,
+                    mp_holistic.HAND_CONNECTIONS,
+                    connection_drawing_spec=mp_drawing_styles
+                        .get_default_hand_connections_style(),
+                )
+
+                mp_drawing.draw_landmarks(
+                    image,
+                    holisticResults.right_hand_landmarks,
+                    mp_holistic.HAND_CONNECTIONS,
+                    connection_drawing_spec=mp_drawing_styles
+                        .get_default_hand_connections_style(),
+                )
+
+                if holisticResults.left_hand_landmarks is not None:
+                    combined_results.append(holisticResults.left_hand_landmarks)
+                    multi_handedness.append("Right")
+
+                if holisticResults.right_hand_landmarks is not None:
+                    combined_results.append(holisticResults.right_hand_landmarks)
+                    multi_handedness.append("Left")
+
+                if len(combined_results) > 0:
+                    for hand_landmarks, handedness in zip(combined_results, multi_handedness):
+                        hand_landmarks_list3D = calc_landmark_list3D(debug_image, hand_landmarks)
+                        holisticHandsLandmarkList.append(hand_landmarks_list3D)
+
+                if holisticResults.pose_landmarks is not None:
+                    holisticPoseLandmarkList = calc_landmark_list3D(debug_image, holisticResults.pose_landmarks)
+                    #print("There are " + str(len(holisticPoseLandmarkList)))
+
             image.flags.writeable = True
             image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-            mp_drawing.draw_landmarks(
-                image,
-                results.face_landmarks,
-                mp_holistic.FACEMESH_CONTOURS,
-                landmark_drawing_spec=None,
-                connection_drawing_spec=mp_drawing_styles
-                    .get_default_face_mesh_contours_style())
-            mp_drawing.draw_landmarks(
-                image,
-                results.pose_landmarks,
-                mp_holistic.POSE_CONNECTIONS,
-                landmark_drawing_spec=mp_drawing_styles
-                    .get_default_pose_landmarks_style())
 
-            mp_drawing.draw_landmarks(
-                image,
-                results.left_hand_landmarks,
-                mp_holistic.HAND_CONNECTIONS,
-                connection_drawing_spec=mp_drawing_styles
-                    .get_default_hand_connections_style(),
-            )
-
-            mp_drawing.draw_landmarks(
-                image,
-                results.right_hand_landmarks,
-                mp_holistic.HAND_CONNECTIONS,
-                connection_drawing_spec=mp_drawing_styles
-                    .get_default_hand_connections_style(),
-            )
+            #byteString = bytes(cv2.imencode('.jpg', image)[1].tostring())
+            #print("ByteString Data" + str(getsizeof(byteString)))
+            #print(byteString)
+            dataPacket = {
+                "hands_landmarks": handsLandmarkList,
+                "holistic_pose_land_marks": holisticPoseLandmarkList,
+                "holistic_hands_landmarks": holisticHandsLandmarkList
+            }
 
 
-            condition = np.stack(
-                (selfieResults.segmentation_mask,) * 3, axis=-1) > 0.6
-            # The background can be customized.
-            #   a) Load an image (with the same width and height of the input image) to
-            #      be the background, e.g., bg_image = cv2.imread('/path/to/image/file')
-            #   b) Blur the input image by applying image filtering, e.g.,
-            #      bg_image = cv2.GaussianBlur(image,(55,55),0)
+            #dataPacket2 = {
+            #    "segmentation_mask": condition.tolist()
+            #}
 
-            if bg_image is None:
-                bg_image = np.zeros(image.shape, dtype=np.uint8)
-                bg_image[:] = BG_COLOR
+            #dataPacket3 = {
+            #    "segmentation_mask": segmaskList
+            #}
 
-            output_image = np.where(condition, np.ones(image.shape, dtype=np.uint8), bg_image)
+            dataJson1 = json.dumps(dataPacket)
+            #dataJson2 = json.dumps(dataPacket2)
+            #dataJson3 = json.dumps(dataPacket3)
+            #print("Segmentation Integer Data" + str(getsizeof(dataJson2)))
+            #print("All hands data " + str(getsizeof(dataJson1)))
+            #print("Segmentation Integer Data" + str(getsizeof(dataJson2)))
+            #print("Segmentation Full Data" + str(getsizeof(dataJson3)))
+            #mySocket.sendto(str(dataJson).encode(), (SERVER_IP, PORT_NUMBER))
+            sock.SendData(str(dataJson1))  # Send this string to other application
 
-            # Flip the image horizontally for a selfie-view display.
-            fps, image = fpsReader.update(image, pos=(50, 80), color=(0, 255, 0), scale=5, thickness=5)
-
-            if results.right_hand_landmarks is not None:
-                
-
+            #dataJson = json.dumps(dataPacket2)
+            #sock.SendData(str(dataJson))  # Send this string to other application
             #segmask = np.zeros(image.shape, dtype=np.uint8)
-
+            imgList = []
             #imgList = [image, image, selfieResults.segmentation_mask]
-            cv2.imshow("segMask", output_image)
-            #stackedImg = cvzone.stackImages(imgList, 3, 0.4)
-            cv2.imshow("stackedImg", image)
+            stackedImagesCounter = 0
+            debugSelfieSegmentation = True
+            debugHands = True
+            debugHolistic = True
+
+            blank = np.zeros(image.shape, dtype=np.uint8)
+            if modeDictionary["holistic"] is True & debugHolistic is True:
+                imgList.append(image)
+            else:
+                imgList.append(blank)
+
+
+            if modeDictionary["hands"] is True & debugHands is True:
+                imgList.append(handsImage)
+            else:
+                imgList.append(blank)
+
+            if modeDictionary["segmask"] is True & debugSelfieSegmentation is True:
+                imgList.append(segMaskImage)
+            else:
+                imgList.append(blank)
 
 
 
-            if cv2.waitKey(5) & 0xFF == 27:
+
+
+
+
+
+            stackedImg = cvzone.stackImages(imgList, 2, 0.4)
+            fps, stackedImg = fpsReader.update(stackedImg, pos=(50, 80), color=(0, 255, 0), scale=5, thickness=5)
+            cv2.imshow("stackedImg", stackedImg)
+            key = cv2.waitKey(1)
+            data = sock.ReadReceivedData()
+            if data is not None:
+                print(data)
+                unityModeDictionary = json.loads(data)
+                modeDictionary["hands"] = unityModeDictionary["HANDS"]
+                modeDictionary["holistic"] = unityModeDictionary["HOLISTIC"]
+                modeDictionary["segmask"] = unityModeDictionary["SEGMASK"]
+
+            select_mode(key, modeDictionary)
+            if key & 0xFF == 27:
                 break
         cap.release()
+
+
+def convertSegMaskToBytes(segmask):
+    counter = 0
+    for columns in segmask:
+        print(counter)
+        counter = counter + 1
+
+        for rows in columns:
+            print(rows)
+
+
 
 
 def myconverter(obj):
@@ -170,20 +315,26 @@ def myconverter(obj):
         return obj.tolist()
 
 
-def select_mode(key, mode):
+def select_mode(key, modeDictionary):
     number = -1
     if 48 <= key <= 57:  # 0 ~ 9
         number = key - 48
-    if key == 110:  # n
-        mode = 0
-    if key == 107:  # k
-        mode = 1
-    if key == 104:  # h
-        mode = 2
-    return number, mode
+
+        if number == 1:
+            modeDictionary["holistic"] = not modeDictionary["holistic"]
+            print("Toggling Holistic")
+
+        if number == 2:
+            modeDictionary["hands"] = not modeDictionary["hands"]
+            print("Toggling Hands")
+
+        if number == 3:
+            modeDictionary["segmask"] = not modeDictionary["segmask"]
+            print("Toggling Segmask")
 
 
-def calc_bounding_rect(image, landmarks):
+
+'''def calc_bounding_rect(image, landmarks):
     image_width, image_height = image.shape[1], image.shape[0]
 
     landmark_array = np.empty((0, 2), int)
@@ -199,7 +350,7 @@ def calc_bounding_rect(image, landmarks):
     x, y, w, h = cv.boundingRect(landmark_array)
 
     return [x, y, x + w, y + h]
-
+'''
 
 def calc_landmark_list(image, landmarks):
     image_width, image_height = image.shape[1], image.shape[0]
@@ -219,6 +370,7 @@ def calc_landmark_list(image, landmarks):
 
 def calc_landmark_list3D(image, landmarks):
     image_width, image_height = image.shape[1], image.shape[0]
+
 
     landmark_point = []
 
@@ -259,7 +411,7 @@ def pre_process_landmark(landmark_list):
 
     return temp_landmark_list
 
-
+"""
 def pre_process_point_history(image, point_history):
     image_width, image_height = image.shape[1], image.shape[0]
 
@@ -543,6 +695,6 @@ def draw_info(image, fps, mode, number):
                        cv.LINE_AA)
     return image
 
-
+"""
 if __name__ == '__main__':
     main()
